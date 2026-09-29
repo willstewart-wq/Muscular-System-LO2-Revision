@@ -1,0 +1,1355 @@
+import React, { useState, useEffect } from 'react';
+
+// Levenshtein distance for string edit calculation
+function levenshtein(a, b) {
+  const matrix = [];
+  for (let i = 0; i <= b.length; i++) matrix[i] = [i];
+  for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
+
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      if (b.charAt(i - 1) === a.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1,
+          matrix[i][j - 1] + 1,
+          matrix[i - 1][j] + 1
+        );
+      }
+    }
+  }
+  return matrix[b.length][a.length];
+}
+
+// Phonetic transformation helper to accept common spelling variations
+function simplifyPhonetic(str) {
+  return str.toLowerCase()
+    .replace(/[^a-z0-9]/g, '')
+    .replace(/ph/g, 'f')
+    .replace(/ck/g, 'k')
+    .replace(/c(?=[eiy])/g, 's')
+    .replace(/c/g, 'k')
+    .replace(/ae|oe/g, 'e')
+    .replace(/y/g, 'i')
+    .replace(/(.)\1+/g, '$1'); // deduplicate consecutive identical letters
+}
+
+// Check fuzzy & phonetic match against acceptable targets
+function isFuzzyMatch(userInput, targets) {
+  if (!userInput || !userInput.trim()) return false;
+  const inputClean = userInput.trim().toLowerCase();
+  const inputPhonetic = simplifyPhonetic(userInput);
+
+  const targetList = Array.isArray(targets) ? targets : [targets];
+
+  for (let target of targetList) {
+    const targetClean = target.trim().toLowerCase();
+    if (inputClean === targetClean) return true;
+
+    // Direct phonetic equivalence check
+    const targetPhonetic = simplifyPhonetic(target);
+    if (inputPhonetic === targetPhonetic && inputPhonetic.length > 2) return true;
+
+    // Distance threshold check
+    const dist = levenshtein(inputClean, targetClean);
+    const maxLen = Math.max(inputClean.length, targetClean.length);
+    if (maxLen <= 4 && dist <= 1) return true;
+    if (maxLen > 4 && maxLen <= 8 && dist <= 2) return true;
+    if (maxLen > 8 && dist <= 3) return true;
+
+    // High similarity ratio check
+    const similarity = 1 - (dist / maxLen);
+    if (similarity >= 0.72) return true;
+  }
+  return false;
+}
+
+// Evaluate an individual answer field
+function evaluateField(userInput, expectedTargets) {
+  if (!userInput || !userInput.trim()) return { isCorrect: false, matchType: 'none' };
+  const cleanInput = userInput.trim().toLowerCase();
+  const targets = Array.isArray(expectedTargets) ? expectedTargets : [expectedTargets];
+
+  for (let t of targets) {
+    if (cleanInput === t.trim().toLowerCase()) {
+      return { isCorrect: true, matchType: 'exact' };
+    }
+  }
+
+  if (isFuzzyMatch(userInput, targets)) {
+    return { isCorrect: true, matchType: 'fuzzy' };
+  }
+
+  return { isCorrect: false, matchType: 'none' };
+}
+
+// Master 31 Muscles & anatomical targets
+const MUSCLE_BANK_31 = [
+  { name: "Biceps Brachii", region: "Upper Body & Arms" },
+  { name: "Triceps Brachii", region: "Upper Body & Arms" },
+  { name: "Pectoralis Major", region: "Upper Body & Arms" },
+  { name: "Deltoid", region: "Upper Body & Arms" },
+  { name: "Teres Major", region: "Upper Body & Arms" },
+  { name: "Trapezius", region: "Upper Body & Arms" },
+  { name: "Latissimus Dorsi", region: "Upper Body & Arms" },
+  { name: "Wrist Flexors", region: "Upper Body & Arms" },
+  { name: "Wrist Extensors", region: "Upper Body & Arms" },
+  { name: "Pronator Teres", region: "Upper Body & Arms" },
+  { name: "Supinator Teres", region: "Upper Body & Arms" },
+  
+  { name: "Obliques", region: "Trunk & Core" },
+  { name: "Rectus Abdominis", region: "Trunk & Core" },
+  { name: "Erector Spinae", region: "Trunk & Core" },
+
+  { name: "Iliopsoas", region: "Hip & Thigh" },
+  { name: "Adductor Brevis", region: "Hip & Thigh" },
+  { name: "Adductor Longus", region: "Hip & Thigh" },
+  { name: "Adductor Magnus", region: "Hip & Thigh" },
+  { name: "Rectus Femoris", region: "Hip & Thigh" },
+  { name: "Vastus Lateralis", region: "Hip & Thigh" },
+  { name: "Vastus Medialis", region: "Hip & Thigh" },
+  { name: "Vastus Intermedius", region: "Hip & Thigh" },
+  { name: "Semimembranosus", region: "Hip & Thigh" },
+  { name: "Semitendinosus", region: "Hip & Thigh" },
+  { name: "Biceps Femoris", region: "Hip & Thigh" },
+  { name: "Gluteus Maximus", region: "Hip & Thigh" },
+  { name: "Gluteus Medius", region: "Hip & Thigh" },
+  { name: "Gluteus Minimus", region: "Hip & Thigh" },
+
+  { name: "Soleus", region: "Lower Leg & Ankle" },
+  { name: "Gastrocnemius", region: "Lower Leg & Ankle" },
+  { name: "Tibialis Anterior", region: "Lower Leg & Ankle" }
+];
+
+const REGIONS = ["Upper Body & Arms", "Trunk & Core", "Hip & Thigh", "Lower Leg & Ankle"];
+
+// Sheet 1 Tissue & Contractions Answers
+const SHEET1_TISSUE_ANSWERS = {
+  q1: ["Skeletal Muscle", "Skeletal"],
+  q2: ["Smooth Muscle", "Smooth"],
+  q3: ["Cardiac Muscle", "Cardiac"],
+  q4: ["30-40%", "30 to 40%", "30-40", "30%-40%", "30-40 percent"],
+  q5: ["Peristalsis", "Peristaltic", "Peristaltic waves"]
+};
+
+const SHEET1_CONTRACTION_ANSWERS = {
+  q1: ["Isometric", "Isometric contraction"],
+  q2: ["Concentric", "Isotonic Concentric", "Isotonic Concentric contraction"],
+  q3: ["Eccentric", "Isotonic Eccentric", "Isotonic Eccentric contraction"]
+};
+
+// Sheet 2 Muscle Roles & Movement Matrix Answers
+const SHEET2_ROLES_ANSWERS = {
+  agonist: ["Agonist", "Prime Mover", "Main muscle contracting"],
+  antagonist: ["Antagonist", "Opposing muscle relaxing"],
+  synergist: ["Synergist", "Supporting muscle", "Assists prime mover"],
+  fixator: ["Fixator", "Stabilizing muscle", "Fixes joint origin"]
+};
+
+const SHEET2_BICEPCURL_ANSWERS = {
+  agonist: ["Biceps", "Biceps Brachii", "Bicep", "Bicep brachii"],
+  antagonist: ["Triceps", "Triceps Brachii", "Tricep", "Tricep brachii"],
+  synergist: ["Biceps Brachialis", "Brachialis", "Brachioradialis", "Bicep brachialis"],
+  fixator: ["Deltoid", "Trapezius", "Deltoids", "Pectorals"]
+};
+
+const SHEET2_MATRIX_ANSWERS = {
+  knee_ext_ag: ["Quadriceps", "Rectus Femoris", "Quads", "Vastus Lateralis", "Vastus Medialis"],
+  knee_ext_ant: ["Hamstrings", "Biceps Femoris", "Semitendinosus", "Semimembranosus"],
+  spine_flex_ag: ["Rectus Abdominis", "Abdominals", "Abs", "Obliques"],
+  spine_flex_ant: ["Erector Spinae", "Lower Back"],
+  plantar_ag: ["Gastrocnemius", "Soleus", "Calf", "Calves"],
+  plantar_ant: ["Tibialis Anterior"],
+  dorsi_ag: ["Tibialis Anterior"],
+  dorsi_ant: ["Gastrocnemius", "Soleus", "Calf"],
+  sh_abd_ag: ["Deltoid", "Deltoids", "Middle Deltoid"],
+  sh_abd_ant: ["Latissimus Dorsi", "Pectoralis Major", "Lats", "Pecs"],
+  sh_flex_ag: ["Anterior Deltoid", "Pectoralis Major", "Deltoid"],
+  sh_flex_ant: ["Latissimus Dorsi", "Posterior Deltoid", "Trapezius"],
+  hip_abd_ag: ["Gluteus Medius", "Gluteus Minimus", "Gluteals", "Glutes"],
+  hip_abd_ant: ["Adductors", "Adductor Longus", "Adductor Magnus", "Adductor Brevis"],
+  sh_hflex_ag: ["Pectoralis Major", "Pectorals", "Pecs"],
+  sh_hflex_ant: ["Latissimus Dorsi", "Trapezius", "Rear Deltoid"],
+  sh_elev_ag: ["Trapezius", "Traps"],
+  sh_elev_ant: ["Lower Trapezius", "Latissimus Dorsi", "Depressors"]
+};
+
+// Sheet 3 Microscopic Hierarchy Correct Sequence
+const HIERARCHY_CORRECT_ORDER = [
+  "Epimysium",
+  "Perimysium",
+  "Muscle Fascicle",
+  "Endomysium",
+  "Muscle Fiber",
+  "Myofibril",
+  "Sarcomere",
+  "Actin & Myosin"
+];
+
+// Sheet 3 Fibre Matrix Answers
+const SHEET3_FIBRE_ANSWERS = {
+  t1_speed: ["Slow"],
+  t1_force: ["Low"],
+  t1_fatigue: ["High"],
+  t1_size: ["Small", "Thin"],
+  t1_athlete: ["Marathon runner", "Endurance athlete", "Triathlete", "Distance runner"],
+
+  t2a_speed: ["Fast"],
+  t2a_force: ["Medium", "Moderate", "High"],
+  t2a_fatigue: ["Medium", "Moderate"],
+  t2a_size: ["Medium", "Intermediate"],
+  t2a_athlete: ["800m runner", "Middle distance", "Swimmer", "Games player"],
+
+  t2b_speed: ["Very Fast", "Fast", "Explosive"],
+  t2b_force: ["High", "Very High", "Strongest", "Maximum"],
+  t2b_fatigue: ["Low", "Rapid fatigue"],
+  t2b_size: ["Large", "Thick"],
+  t2b_athlete: ["100m Sprinter", "Powerlifter", "Shot putter", "Sprinter", "Weightlifter"]
+};
+
+const SHEET3_RULES_ANSWERS = {
+  q1: ["45% Type 2 and 55% Type 1", "45% Type 2 / 55% Type 1", "45% Fast 55% Slow", "55% Type 1 45% Type 2", "45/55", "55/45"],
+  q2: ["False", "No", "Cannot convert"],
+  q3: ["Type 2a and Type 2b", "Type IIa and IIb", "Type 2a / 2b", "Fast twitch subtypes", "2a and 2b"]
+};
+
+// Sheet 4 Short-Term vs Long-Term Effects Items
+const SHORT_LONG_ITEMS = [
+  { id: "e1", text: "Microscopic tears in muscle fibers", correct: "Short-Term" },
+  { id: "e2", text: "Increased muscle temperature", correct: "Short-Term" },
+  { id: "e3", text: "Depletion of energy stores & muscle fatigue", correct: "Short-Term" },
+  { id: "e4", text: "Increased muscle pliability / elasticity & ROM", correct: "Short-Term" },
+  { id: "e5", text: "Muscular Hypertrophy (increase in muscle size)", correct: "Long-Term" },
+  { id: "e6", text: "Increased strength of tendons & ligaments", correct: "Long-Term" },
+  { id: "e7", text: "Increased glycogen storage capacity in muscles", correct: "Long-Term" },
+  { id: "e8", text: "Increased number and size of mitochondria", correct: "Long-Term" },
+  { id: "e9", text: "Increased myoglobin content for oxygen transport", correct: "Long-Term" }
+];
+
+// Sheet 4 Warm-Up vs Cool-Down Mechanism Items
+const WARM_COOL_ITEMS = [
+  { id: "w1", text: "Disperses and removes accumulated lactic acid", correct: "Cool-Down" },
+  { id: "w2", text: "Prevents blood pooling in working muscles & supports venous return", correct: "Cool-Down" },
+  { id: "w3", text: "Vasodilation increases oxygen delivery and muscle temperature", correct: "Warm-Up" },
+  { id: "w4", text: "Primes nerve-muscle connection efficiency for movement", correct: "Warm-Up" },
+  { id: "w5", text: "Increases pliability reducing injury risk (e.g. muscle strain)", correct: "Warm-Up" },
+  { id: "w6", text: "Stretching warm muscles post-exercise reduces DOMS likelihood", correct: "Cool-Down" }
+];
+
+// Sheet 4 True / False Items
+const TRUE_FALSE_ITEMS = [
+  { id: "tf1", statement: "Muscles can both push and pull to create joint movements.", correct: "FALSE", explanation: "Muscles ONLY pull; they never push!" },
+  { id: "tf2", statement: "A structured cool-down helps reduce Delayed Onset Muscle Soreness (DOMS).", correct: "TRUE", explanation: "Cool-downs flush waste products and relieve muscle tension." },
+  { id: "tf3", statement: "Fast twitch muscle fibres can turn into slow twitch fibres with endurance training.", correct: "FALSE", explanation: "Genetically born ST/FT distribution cannot switch, though Type 2a/2b can adapt traits." },
+  { id: "tf4", statement: "Cardiac muscle tissue is voluntary and controlled by conscious thought.", correct: "FALSE", explanation: "Cardiac muscle is involuntary and controlled by its own myogenic system." },
+  { id: "tf5", statement: "An increase in muscle temperature during warm-up improves muscle pliability.", correct: "TRUE", explanation: "Warm muscles are more elastic and less prone to strains." }
+];
+
+const createInitialState = () => ({
+  studentName: "",
+  studentDate: new Date().toISOString().split('T')[0],
+  // Sheet 1
+  s1_t1: MUSCLE_BANK_31.reduce((acc, m) => ({ ...acc, [m.name]: "" }), {}),
+  s1_t2: { q1: "", q2: "", q3: "", q4: "", q5: "" },
+  s1_t3: { q1: "", q2: "", q3: "" },
+  // Sheet 2
+  s2_t1: { agonist: "", antagonist: "", synergist: "", fixator: "" },
+  s2_t2: { agonist: "", antagonist: "", synergist: "", fixator: "" },
+  s2_t3: {
+    knee_ext_ag: "", knee_ext_ant: "",
+    spine_flex_ag: "", spine_flex_ant: "",
+    plantar_ag: "", plantar_ant: "",
+    dorsi_ag: "", dorsi_ant: "",
+    sh_abd_ag: "", sh_abd_ant: "",
+    sh_flex_ag: "", sh_flex_ant: "",
+    hip_abd_ag: "", hip_abd_ant: "",
+    sh_hflex_ag: "", sh_hflex_ant: "",
+    sh_elev_ag: "", sh_elev_ant: ""
+  },
+  // Sheet 3
+  s3_t1: [
+    "Perimysium", "Sarcomere", "Epimysium", "Myofibril", "Muscle Fascicle", "Actin & Myosin", "Endomysium", "Muscle Fiber"
+  ],
+  s3_t2: {
+    t1_speed: "", t1_force: "", t1_fatigue: "", t1_size: "", t1_athlete: "",
+    t2a_speed: "", t2a_force: "", t2a_fatigue: "", t2a_size: "", t2a_athlete: "",
+    t2b_speed: "", t2b_force: "", t2b_fatigue: "", t2b_size: "", t2b_athlete: ""
+  },
+  s3_t3: { q1: "", q2: "", q3: "" },
+  // Sheet 4
+  s4_t1: SHORT_LONG_ITEMS.reduce((acc, item) => ({ ...acc, [item.id]: "" }), {}),
+  s4_t2: WARM_COOL_ITEMS.reduce((acc, item) => ({ ...acc, [item.id]: "" }), {}),
+  s4_t3: TRUE_FALSE_ITEMS.reduce((acc, item) => ({ ...acc, [item.id]: "" }), {})
+});
+
+export default function App() {
+  const [formData, setFormData] = useState(() => {
+    const saved = localStorage.getItem('pe_muscular_system_data');
+    if (saved) {
+      try { return JSON.parse(saved); } catch (e) { console.error(e); }
+    }
+    return createInitialState();
+  });
+
+  const [activeTab, setActiveTab] = useState('sheet1');
+  const [evaluation, setEvaluation] = useState(null);
+  const [showResetModal, setShowResetModal] = useState(false);
+  const [notification, setNotification] = useState("");
+
+  // LocalStorage auto-save
+  useEffect(() => {
+    localStorage.setItem('pe_muscular_system_data', JSON.stringify(formData));
+  }, [formData]);
+
+  const showToast = (msg) => {
+    setNotification(msg);
+    setTimeout(() => setNotification(""), 3000);
+  };
+
+  const handleInputChange = (section, key, value) => {
+    setFormData(prev => ({
+      ...prev,
+      [section]: {
+        ...prev[section],
+        [key]: value
+      }
+    }));
+  };
+
+  const runSelfMarking = () => {
+    const res = {
+      sheet1: { score: 0, total: 0, fields: {} },
+      sheet2: { score: 0, total: 0, fields: {} },
+      sheet3: { score: 0, total: 0, fields: {} },
+      sheet4: { score: 0, total: 0, fields: {} },
+      overallScore: 0,
+      overallTotal: 0
+    };
+
+    // --- SHEET 1 EVALUATION ---
+    // Task 1: 31 Muscles
+    MUSCLE_BANK_31.forEach(m => {
+      const userVal = formData.s1_t1[m.name];
+      const isOk = userVal === m.region;
+      res.sheet1.total++;
+      if (isOk) res.sheet1.score++;
+      res.sheet1.fields[`s1_t1_${m.name}`] = { isCorrect: isOk, expected: m.region };
+    });
+
+    // Task 2: Tissue Types
+    Object.keys(SHEET1_TISSUE_ANSWERS).forEach(k => {
+      const ev = evaluateField(formData.s1_t2[k], SHEET1_TISSUE_ANSWERS[k]);
+      res.sheet1.total++;
+      if (ev.isCorrect) res.sheet1.score++;
+      res.sheet1.fields[`s1_t2_${k}`] = { ...ev, expected: SHEET1_TISSUE_ANSWERS[k][0] };
+    });
+
+    // Task 3: Contractions
+    Object.keys(SHEET1_CONTRACTION_ANSWERS).forEach(k => {
+      const ev = evaluateField(formData.s1_t3[k], SHEET1_CONTRACTION_ANSWERS[k]);
+      res.sheet1.total++;
+      if (ev.isCorrect) res.sheet1.score++;
+      res.sheet1.fields[`s1_t3_${k}`] = { ...ev, expected: SHEET1_CONTRACTION_ANSWERS[k][0] };
+    });
+
+    // --- SHEET 2 EVALUATION ---
+    // Task 1: Roles
+    Object.keys(SHEET2_ROLES_ANSWERS).forEach(k => {
+      const ev = evaluateField(formData.s2_t1[k], SHEET2_ROLES_ANSWERS[k]);
+      res.sheet2.total++;
+      if (ev.isCorrect) res.sheet2.score++;
+      res.sheet2.fields[`s2_t1_${k}`] = { ...ev, expected: SHEET2_ROLES_ANSWERS[k][0] };
+    });
+
+    // Task 2: Bicep Curl
+    Object.keys(SHEET2_BICEPCURL_ANSWERS).forEach(k => {
+      const ev = evaluateField(formData.s2_t2[k], SHEET2_BICEPCURL_ANSWERS[k]);
+      res.sheet2.total++;
+      if (ev.isCorrect) res.sheet2.score++;
+      res.sheet2.fields[`s2_t2_${k}`] = { ...ev, expected: SHEET2_BICEPCURL_ANSWERS[k][0] };
+    });
+
+    // Task 3: Matrix
+    Object.keys(SHEET2_MATRIX_ANSWERS).forEach(k => {
+      const ev = evaluateField(formData.s2_t3[k], SHEET2_MATRIX_ANSWERS[k]);
+      res.sheet2.total++;
+      if (ev.isCorrect) res.sheet2.score++;
+      res.sheet2.fields[`s2_t3_${k}`] = { ...ev, expected: SHEET2_MATRIX_ANSWERS[k][0] };
+    });
+
+    // --- SHEET 3 EVALUATION ---
+    // Task 1: Microscopic Order
+    formData.s3_t1.forEach((item, index) => {
+      const isOk = item === HIERARCHY_CORRECT_ORDER[index];
+      res.sheet3.total++;
+      if (isOk) res.sheet3.score++;
+      res.sheet3.fields[`s3_t1_${index}`] = { isCorrect: isOk, expected: HIERARCHY_CORRECT_ORDER[index] };
+    });
+
+    // Task 2: Fibre Matrix
+    Object.keys(SHEET3_FIBRE_ANSWERS).forEach(k => {
+      const ev = evaluateField(formData.s3_t2[k], SHEET3_FIBRE_ANSWERS[k]);
+      res.sheet3.total++;
+      if (ev.isCorrect) res.sheet3.score++;
+      res.sheet3.fields[`s3_t2_${k}`] = { ...ev, expected: SHEET3_FIBRE_ANSWERS[k][0] };
+    });
+
+    // Task 3: Rules
+    Object.keys(SHEET3_RULES_ANSWERS).forEach(k => {
+      const ev = evaluateField(formData.s3_t3[k], SHEET3_RULES_ANSWERS[k]);
+      res.sheet3.total++;
+      if (ev.isCorrect) res.sheet3.score++;
+      res.sheet3.fields[`s3_t3_${k}`] = { ...ev, expected: SHEET3_RULES_ANSWERS[k][0] };
+    });
+
+    // --- SHEET 4 EVALUATION ---
+    // Task 1: Short vs Long
+    SHORT_LONG_ITEMS.forEach(item => {
+      const userVal = formData.s4_t1[item.id];
+      const isOk = userVal === item.correct;
+      res.sheet4.total++;
+      if (isOk) res.sheet4.score++;
+      res.sheet4.fields[`s4_t1_${item.id}`] = { isCorrect: isOk, expected: item.correct };
+    });
+
+    // Task 2: Warm vs Cool
+    WARM_COOL_ITEMS.forEach(item => {
+      const userVal = formData.s4_t2[item.id];
+      const isOk = userVal === item.correct;
+      res.sheet4.total++;
+      if (isOk) res.sheet4.score++;
+      res.sheet4.fields[`s4_t2_${item.id}`] = { isCorrect: isOk, expected: item.correct };
+    });
+
+    // Task 3: True / False
+    TRUE_FALSE_ITEMS.forEach(item => {
+      const userVal = formData.s4_t3[item.id];
+      const isOk = userVal === item.correct;
+      res.sheet4.total++;
+      if (isOk) res.sheet4.score++;
+      res.sheet4.fields[`s4_t3_${item.id}`] = { isCorrect: isOk, expected: item.correct };
+    });
+
+    res.overallScore = res.sheet1.score + res.sheet2.score + res.sheet3.score + res.sheet4.score;
+    res.overallTotal = res.sheet1.total + res.sheet2.total + res.sheet3.total + res.sheet4.total;
+
+    setEvaluation(res);
+    showToast(`Marking Complete! Overall Score: ${res.overallScore} / ${res.overallTotal}`);
+  };
+
+  const handleSaveFile = () => {
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(formData, null, 2));
+    const downloadAnchor = document.createElement('a');
+    downloadAnchor.setAttribute("href", dataStr);
+    downloadAnchor.setAttribute("download", `Muscular_System_Revision_${formData.studentName.replace(/\s+/g, '_') || 'Student'}.json`);
+    document.body.appendChild(downloadAnchor);
+    downloadAnchor.click();
+    downloadAnchor.remove();
+    showToast("Workbook exported to JSON file!");
+  };
+
+  const handleLoadFile = (e) => {
+    const fileReader = new FileReader();
+    if (e.target.files && e.target.files[0]) {
+      fileReader.readAsText(e.target.files[0], "UTF-8");
+      fileReader.onload = (event) => {
+        try {
+          const parsed = JSON.parse(event.target.result);
+          setFormData(parsed);
+          setEvaluation(null);
+          showToast("Workbook loaded successfully!");
+        } catch (err) {
+          showToast("Invalid JSON file format!");
+        }
+      };
+    }
+  };
+
+  const handleReset = () => {
+    setFormData(createInitialState());
+    setEvaluation(null);
+    setShowResetModal(false);
+    showToast("Workbook reset to default!");
+  };
+
+  const handlePrint = () => {
+    window.print();
+  };
+
+  // Reorder helper for Hierarchy ordering task
+  const moveHierarchyItem = (index, direction) => {
+    const newArr = [...formData.s3_t1];
+    const targetIdx = index + direction;
+    if (targetIdx < 0 || targetIdx >= newArr.length) return;
+    const temp = newArr[index];
+    newArr[index] = newArr[targetIdx];
+    newArr[targetIdx] = temp;
+    setFormData(prev => ({ ...prev, s3_t1: newArr }));
+  };
+
+  // Progress percentage calculation
+  const calcFilledCount = () => {
+    let filled = 0;
+    let total = 0;
+
+    // S1 T1
+    Object.values(formData.s1_t1).forEach(v => { total++; if (v) filled++; });
+    // S1 T2 & T3
+    Object.values(formData.s1_t2).forEach(v => { total++; if (v) filled++; });
+    Object.values(formData.s1_t3).forEach(v => { total++; if (v) filled++; });
+    // S2
+    Object.values(formData.s2_t1).forEach(v => { total++; if (v) filled++; });
+    Object.values(formData.s2_t2).forEach(v => { total++; if (v) filled++; });
+    Object.values(formData.s2_t3).forEach(v => { total++; if (v) filled++; });
+    // S3
+    Object.values(formData.s3_t2).forEach(v => { total++; if (v) filled++; });
+    Object.values(formData.s3_t3).forEach(v => { total++; if (v) filled++; });
+    // S4
+    Object.values(formData.s4_t1).forEach(v => { total++; if (v) filled++; });
+    Object.values(formData.s4_t2).forEach(v => { total++; if (v) filled++; });
+    Object.values(formData.s4_t3).forEach(v => { total++; if (v) filled++; });
+
+    return Math.round((filled / total) * 100);
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-100 text-slate-800 font-sans print:bg-white print:p-0">
+      
+      {/* Toast Notification */}
+      {notification && (
+        <div className="fixed bottom-4 right-4 z-50 bg-slate-900 text-white px-4 py-2 rounded-lg shadow-xl text-sm font-medium animate-bounce print:hidden">
+          {notification}
+        </div>
+      )}
+
+      {/* Floating Action Header */}
+      <header className="sticky top-0 z-40 bg-slate-900 text-white shadow-lg print:hidden">
+        <div className="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center space-x-3">
+            <div className="bg-emerald-500 text-slate-900 font-bold p-2 rounded-lg text-xs uppercase tracking-widest">
+              PE LO2
+            </div>
+            <div>
+              <h1 className="text-lg font-bold leading-tight">Muscular System Online Workbook</h1>
+              <p className="text-xs text-slate-400">Interactive Revision &amp; Phonetic Auto-Marking System</p>
+            </div>
+          </div>
+
+          <div className="flex items-center flex-wrap gap-2">
+            <button
+              onClick={runSelfMarking}
+              className="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs px-3 py-2 rounded shadow transition flex items-center gap-1"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+              Mark My Work
+            </button>
+
+            <button
+              onClick={handleSaveFile}
+              className="bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs px-3 py-2 rounded transition flex items-center gap-1"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"></path></svg>
+              Save JSON
+            </button>
+
+            <label className="bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs px-3 py-2 rounded transition cursor-pointer flex items-center gap-1">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
+              Load JSON
+              <input type="file" accept=".json" onChange={handleLoadFile} className="hidden" />
+            </label>
+
+            <button
+              onClick={handlePrint}
+              className="bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs px-3 py-2 rounded transition flex items-center gap-1"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path></svg>
+              Print / PDF
+            </button>
+
+            <button
+              onClick={() => setShowResetModal(true)}
+              className="bg-rose-900/60 hover:bg-rose-800 text-rose-200 text-xs px-3 py-2 rounded transition"
+            >
+              Reset
+            </button>
+          </div>
+        </div>
+
+        {/* Global Progress Bar */}
+        <div className="w-full bg-slate-800 h-1.5">
+          <div
+            className="bg-emerald-400 h-1.5 transition-all duration-300"
+            style={{ width: `${calcFilledCount()}%` }}
+          ></div>
+        </div>
+      </header>
+
+      {/* Main Container */}
+      <main className="max-w-7xl mx-auto p-4 md:p-6 print:p-0">
+        
+        {/* Student Metadata Bar */}
+        <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 mb-6 flex flex-wrap gap-4 items-center justify-between print:border-none print:shadow-none print:mb-2">
+          <div className="flex flex-wrap gap-4 flex-1">
+            <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Student Name:</label>
+              <input
+                type="text"
+                value={formData.studentName}
+                onChange={(e) => setFormData(prev => ({ ...prev, studentName: e.target.value }))}
+                placeholder="Enter full name..."
+                className="flex-1 bg-slate-50 border border-slate-300 rounded px-2.5 py-1 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Date:</label>
+              <input
+                type="date"
+                value={formData.studentDate}
+                onChange={(e) => setFormData(prev => ({ ...prev, studentDate: e.target.value }))}
+                className="bg-slate-50 border border-slate-300 rounded px-2.5 py-1 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 text-xs font-bold text-slate-600 print:hidden">
+            <span>Workbook Progress:</span>
+            <span className="bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full">
+              {calcFilledCount()}% Filled
+            </span>
+          </div>
+        </div>
+
+        {/* Sheet Tabs */}
+        <div className="flex flex-wrap gap-2 mb-6 border-b border-slate-200 pb-2 print:hidden">
+          {[
+            { id: 'sheet1', label: 'Sheet 1: Anatomy & Contractions' },
+            { id: 'sheet2', label: 'Sheet 2: Roles & Movements' },
+            { id: 'sheet3', label: 'Sheet 3: Microscopic & Fibres' },
+            { id: 'sheet4', label: 'Sheet 4: Exercise & Warm-Up' },
+            { id: 'summary', label: '📊 Summary & Answers' }
+          ].map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`px-4 py-2 rounded-t-lg text-xs md:text-sm font-bold transition ${
+                activeTab === tab.id
+                  ? 'bg-slate-900 text-white shadow'
+                  : 'bg-white text-slate-600 hover:bg-slate-200 border border-slate-200'
+              }`}
+            >
+              {tab.label}
+              {evaluation && tab.id !== 'summary' && (
+                <span className={`ml-2 text-[10px] px-1.5 py-0.5 rounded-full ${
+                  evaluation[tab.id].score === evaluation[tab.id].total
+                    ? 'bg-emerald-500 text-white'
+                    : 'bg-amber-500 text-white'
+                }`}>
+                  {evaluation[tab.id].score}/{evaluation[tab.id].total}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+
+        {}
+        {(activeTab === 'sheet1' || activeTab === 'all') && (
+          <div className="space-y-6">
+            <div className="bg-slate-900 text-white p-4 rounded-xl shadow-sm">
+              <h2 className="text-lg font-bold uppercase tracking-wide text-emerald-400">Sheet 1: Muscle Anatomy &amp; Contraction Types</h2>
+              <p className="text-xs text-slate-300">LO2 Muscular System • 31 Anatomical Muscles, Tissue Types &amp; Contractions</p>
+            </div>
+
+            {/* Task 1: 31 Muscle Categorisation */}
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+              <div className="flex justify-between items-center border-b pb-2 mb-4">
+                <h3 className="font-bold text-slate-800 text-sm md:text-base uppercase">Task 1: Categorise 31 Muscles into Body Regions</h3>
+                <span className="text-xs bg-slate-100 text-slate-600 font-semibold px-2.5 py-1 rounded">31 Items</span>
+              </div>
+              <p className="text-xs text-slate-500 italic mb-4">Select the correct anatomical body region for each of the 31 muscles listed below.</p>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {MUSCLE_BANK_31.map((muscle) => {
+                  const evalRes = evaluation?.sheet1?.fields[`s1_t1_${muscle.name}`];
+                  return (
+                    <div
+                      key={muscle.name}
+                      className={`p-2.5 rounded-lg border text-xs flex flex-col justify-between gap-1.5 transition ${
+                        evalRes
+                          ? evalRes.isCorrect
+                            ? 'bg-emerald-50 border-emerald-400 text-emerald-900'
+                            : 'bg-rose-50 border-rose-400 text-rose-900'
+                          : 'bg-slate-50 border-slate-200'
+                      }`}
+                    >
+                      <div className="font-bold text-slate-800 flex justify-between items-center">
+                        <span>{muscle.name}</span>
+                        {evalRes && (
+                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${evalRes.isCorrect ? 'bg-emerald-200 text-emerald-800' : 'bg-rose-200 text-rose-800'}`}>
+                            {evalRes.isCorrect ? '✓ Correct' : '✗ Incorrect'}
+                          </span>
+                        )}
+                      </div>
+
+                      <select
+                        value={formData.s1_t1[muscle.name]}
+                        onChange={(e) => handleInputChange('s1_t1', muscle.name, e.target.value)}
+                        className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-xs focus:ring-2 focus:ring-emerald-500"
+                      >
+                        <option value="">-- Select Body Region --</option>
+                        {REGIONS.map(r => <option key={r} value={r}>{r}</option>)}
+                      </select>
+
+                      {evalRes && !evalRes.isCorrect && (
+                        <div className="text-[10px] text-rose-700 font-semibold mt-0.5">
+                          Answer: {evalRes.expected}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Task 2: Muscle Tissue Types */}
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+              <div className="flex justify-between items-center border-b pb-2 mb-4">
+                <h3 className="font-bold text-slate-800 text-sm md:text-base uppercase">Task 2: Muscle Tissue Types</h3>
+                <span className="text-xs bg-slate-100 text-slate-600 font-semibold px-2.5 py-1 rounded">5 Questions</span>
+              </div>
+
+              <div className="space-y-4 text-xs">
+                {[
+                  { key: 'q1', label: '1. Voluntary, striated muscle attached to bones comprising 30–40% of total body mass:' },
+                  { key: 'q2', label: '2. Involuntary, non-striated muscle found in walls of hollow organs (bladder, uterus):' },
+                  { key: 'q3', label: '3. Involuntary, striated muscle unique to the heart with myogenic electrical control:' },
+                  { key: 'q4', label: '4. What percentage of total body mass does skeletal muscle comprise?' },
+                  { key: 'q5', label: '5. Name the wave-like muscular contractions in the digestive tract:' }
+                ].map((item) => {
+                  const evalRes = evaluation?.sheet1?.fields[`s1_t2_${item.key}`];
+                  return (
+                    <div key={item.key} className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-1.5">
+                      <label className="font-semibold text-slate-700 block">{item.label}</label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={formData.s1_t2[item.key]}
+                          onChange={(e) => handleInputChange('s1_t2', item.key, e.target.value)}
+                          placeholder="Type answer here..."
+                          className={`flex-1 border rounded px-3 py-1.5 text-xs font-medium focus:ring-2 focus:ring-emerald-500 ${
+                            evalRes
+                              ? evalRes.isCorrect
+                                ? 'border-emerald-500 bg-emerald-50 text-emerald-900'
+                                : 'border-rose-500 bg-rose-50 text-rose-900'
+                              : 'border-slate-300'
+                          }`}
+                        />
+                        {evalRes && (
+                          <span className={`text-[10px] font-bold px-2 py-1 rounded ${
+                            evalRes.isCorrect
+                              ? evalRes.matchType === 'fuzzy' ? 'bg-amber-100 text-amber-800' : 'bg-emerald-200 text-emerald-800'
+                              : 'bg-rose-200 text-rose-800'
+                          }`}>
+                            {evalRes.isCorrect ? (evalRes.matchType === 'fuzzy' ? '✓ Accepted (Phonetic)' : '✓ Correct') : '✗ Incorrect'}
+                          </span>
+                        )}
+                      </div>
+                      {evalRes && !evalRes.isCorrect && (
+                        <p className="text-[10px] text-rose-600 font-semibold">Expected Answer: {evalRes.expected}</p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Task 3: Contraction Types */}
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+              <div className="flex justify-between items-center border-b pb-2 mb-4">
+                <h3 className="font-bold text-slate-800 text-sm md:text-base uppercase">Task 3: Isotonic &amp; Isometric Contractions</h3>
+                <span className="text-xs bg-slate-100 text-slate-600 font-semibold px-2.5 py-1 rounded">3 Definitions</span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+                {[
+                  { key: 'q1', title: 'Static Contraction', desc: 'Muscle contracts but length remains unchanged (no bone movement).' },
+                  { key: 'q2', title: 'Lifting Phase Contraction', desc: 'Isotonic contraction where muscle shortens while applying force.' },
+                  { key: 'q3', title: 'Lowering Phase Contraction', desc: 'Isotonic contraction where muscle lengthens under tension.' }
+                ].map((item) => {
+                  const evalRes = evaluation?.sheet1?.fields[`s1_t3_${item.key}`];
+                  return (
+                    <div key={item.key} className="bg-slate-50 border border-slate-200 p-3 rounded-lg flex flex-col justify-between gap-2">
+                      <div>
+                        <div className="font-bold text-slate-800 mb-1">{item.title}</div>
+                        <p className="text-slate-500 text-[11px]">{item.desc}</p>
+                      </div>
+                      <div className="space-y-1">
+                        <input
+                          type="text"
+                          value={formData.s1_t3[item.key]}
+                          onChange={(e) => handleInputChange('s1_t3', item.key, e.target.value)}
+                          placeholder="Name contraction type..."
+                          className={`w-full border rounded px-2.5 py-1 text-xs font-semibold ${
+                            evalRes
+                              ? evalRes.isCorrect ? 'border-emerald-500 bg-emerald-50 text-emerald-900' : 'border-rose-500 bg-rose-50 text-rose-900'
+                              : 'border-slate-300'
+                          }`}
+                        />
+                        {evalRes && !evalRes.isCorrect && (
+                          <div className="text-[10px] text-rose-600 font-semibold">Answer: {evalRes.expected}</div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {}
+        {(activeTab === 'sheet2' || activeTab === 'all') && (
+          <div className="space-y-6">
+            <div className="bg-slate-900 text-white p-4 rounded-xl shadow-sm">
+              <h2 className="text-lg font-bold uppercase tracking-wide text-emerald-400">Sheet 2: Functional Muscle Roles &amp; Movement Matrix</h2>
+              <p className="text-xs text-slate-300">LO2 Muscular System • 4 Roles, Bicep Curl Analysis &amp; Joint Movement Pairs</p>
+            </div>
+
+            {/* Task 1: 4 Roles */}
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+              <h3 className="font-bold text-slate-800 text-sm md:text-base uppercase border-b pb-2 mb-4">Task 1: Define the 4 Functional Roles of Muscles</h3>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                {[
+                  { key: 'agonist', label: '1. Agonist (Prime Mover):', placeholder: 'e.g. Main contracting muscle...' },
+                  { key: 'antagonist', label: '2. Antagonist:', placeholder: 'e.g. Opposing muscle relaxing...' },
+                  { key: 'synergist', label: '3. Synergist:', placeholder: 'e.g. Muscle supporting prime mover...' },
+                  { key: 'fixator', label: '4. Fixator:', placeholder: 'e.g. Statically stabilizes origin...' }
+                ].map((item) => {
+                  const evalRes = evaluation?.sheet2?.fields[`s2_t1_${item.key}`];
+                  return (
+                    <div key={item.key} className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-1">
+                      <label className="font-bold text-slate-700">{item.label}</label>
+                      <input
+                        type="text"
+                        value={formData.s2_t1[item.key]}
+                        onChange={(e) => handleInputChange('s2_t1', item.key, e.target.value)}
+                        placeholder={item.placeholder}
+                        className={`w-full border rounded px-3 py-1.5 text-xs ${
+                          evalRes
+                            ? evalRes.isCorrect ? 'border-emerald-500 bg-emerald-50 text-emerald-900' : 'border-rose-500 bg-rose-50 text-rose-900'
+                            : 'border-slate-300'
+                        }`}
+                      />
+                      {evalRes && !evalRes.isCorrect && (
+                        <span className="text-[10px] text-rose-600 font-semibold block">Expected term: {evalRes.expected}</span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Task 2: Bicep Curl Breakdown */}
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+              <h3 className="font-bold text-slate-800 text-sm md:text-base uppercase border-b pb-2 mb-4">Task 2: Bicep Curl Specific Muscle Roles</h3>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-100 text-slate-700 border-b">
+                      <th className="p-2">Role</th>
+                      <th className="p-2">Active Muscle Name</th>
+                      <th className="p-2">Action / Function in Bicep Curl</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[
+                      { key: 'agonist', role: 'Prime Mover (Agonist)', desc: 'Contracts concentrically to flex elbow' },
+                      { key: 'antagonist', role: 'Antagonist', desc: 'Relaxes to allow elbow flexion' },
+                      { key: 'synergist', role: 'Synergist', desc: 'Assists prime mover in flexing elbow' },
+                      { key: 'fixator', role: 'Fixator', desc: 'Statically fixes shoulder joint origin' }
+                    ].map((row) => {
+                      const evalRes = evaluation?.sheet2?.fields[`s2_t2_${row.key}`];
+                      return (
+                        <tr key={row.key} className="border-b hover:bg-slate-50">
+                          <td className="p-2 font-bold text-slate-800">{row.role}</td>
+                          <td className="p-2">
+                            <input
+                              type="text"
+                              value={formData.s2_t2[row.key]}
+                              onChange={(e) => handleInputChange('s2_t2', row.key, e.target.value)}
+                              placeholder="Name muscle..."
+                              className={`w-full border rounded px-2 py-1 text-xs font-medium ${
+                                evalRes
+                                  ? evalRes.isCorrect ? 'border-emerald-500 bg-emerald-50 text-emerald-900' : 'border-rose-500 bg-rose-50 text-rose-900'
+                                  : 'border-slate-300'
+                              }`}
+                            />
+                            {evalRes && !evalRes.isCorrect && (
+                              <div className="text-[10px] text-rose-600 font-semibold">Answer: {evalRes.expected}</div>
+                            )}
+                          </td>
+                          <td className="p-2 text-slate-600">{row.desc}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Task 3: Movement Matrix */}
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+              <h3 className="font-bold text-slate-800 text-sm md:text-base uppercase border-b pb-2 mb-4">Task 3: Movement &amp; Muscle Action Matrix</h3>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-100 text-slate-700 border-b">
+                      <th className="p-2">Joint Action</th>
+                      <th className="p-2">Agonist Muscle</th>
+                      <th className="p-2">Antagonist Muscle</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[
+                      { keyAg: 'knee_ext_ag', keyAnt: 'knee_ext_ant', action: 'Knee Extension (e.g. Kicking a ball)' },
+                      { keyAg: 'spine_flex_ag', keyAnt: 'spine_flex_ant', action: 'Flexion of Spine/Trunk (e.g. Sit-up)' },
+                      { keyAg: 'plantar_ag', keyAnt: 'plantar_ant', action: 'Ankle Plantarflexion (Pointing toes)' },
+                      { keyAg: 'dorsi_ag', keyAnt: 'dorsi_ant', action: 'Ankle Dorsiflexion (Pulling toes up)' },
+                      { keyAg: 'sh_abd_ag', keyAnt: 'sh_abd_ant', action: 'Shoulder Abduction (Raising arm sideways)' },
+                      { keyAg: 'sh_flex_ag', keyAnt: 'sh_flex_ant', action: 'Shoulder Flexion (Raising arm forwards)' },
+                      { keyAg: 'hip_abd_ag', keyAnt: 'hip_abd_ant', action: 'Hip Abduction (Moving leg outwards)' },
+                      { keyAg: 'sh_hflex_ag', keyAnt: 'sh_hflex_ant', action: 'Horizontal Shoulder Flexion (Chest pass)' },
+                      { keyAg: 'sh_elev_ag', keyAnt: 'sh_elev_ant', action: 'Shoulder Elevation (Shrugging)' }
+                    ].map((row) => {
+                      const evalAg = evaluation?.sheet2?.fields[`s2_t3_${row.keyAg}`];
+                      const evalAnt = evaluation?.sheet2?.fields[`s2_t3_${row.keyAnt}`];
+
+                      return (
+                        <tr key={row.action} className="border-b hover:bg-slate-50">
+                          <td className="p-2 font-bold text-slate-800">{row.action}</td>
+                          <td className="p-2">
+                            <input
+                              type="text"
+                              value={formData.s2_t3[row.keyAg]}
+                              onChange={(e) => handleInputChange('s2_t3', row.keyAg, e.target.value)}
+                              placeholder="Agonist muscle..."
+                              className={`w-full border rounded px-2 py-1 text-xs ${
+                                evalAg
+                                  ? evalAg.isCorrect ? 'border-emerald-500 bg-emerald-50 text-emerald-900' : 'border-rose-500 bg-rose-50 text-rose-900'
+                                  : 'border-slate-300'
+                              }`}
+                            />
+                            {evalAg && !evalAg.isCorrect && (
+                              <div className="text-[10px] text-rose-600 font-semibold">Answer: {evalAg.expected}</div>
+                            )}
+                          </td>
+                          <td className="p-2">
+                            <input
+                              type="text"
+                              value={formData.s2_t3[row.keyAnt]}
+                              onChange={(e) => handleInputChange('s2_t3', row.keyAnt, e.target.value)}
+                              placeholder="Antagonist muscle..."
+                              className={`w-full border rounded px-2 py-1 text-xs ${
+                                evalAnt
+                                  ? evalAnt.isCorrect ? 'border-emerald-500 bg-emerald-50 text-emerald-900' : 'border-rose-500 bg-rose-50 text-rose-900'
+                                  : 'border-slate-300'
+                              }`}
+                            />
+                            {evalAnt && !evalAnt.isCorrect && (
+                              <div className="text-[10px] text-rose-600 font-semibold">Answer: {evalAnt.expected}</div>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {}
+        {(activeTab === 'sheet3' || activeTab === 'all') && (
+          <div className="space-y-6">
+            <div className="bg-slate-900 text-white p-4 rounded-xl shadow-sm">
+              <h2 className="text-lg font-bold uppercase tracking-wide text-emerald-400">Sheet 3: Microscopic Architecture &amp; Fibre Types</h2>
+              <p className="text-xs text-slate-300">LO2 Muscular System • Microscopic Hierarchy, Fibre Characteristics &amp; Training Adaptations</p>
+            </div>
+
+            {/* Task 1: Microscopic Structure Hierarchy */}
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+              <div className="flex justify-between items-center border-b pb-2 mb-4">
+                <h3 className="font-bold text-slate-800 text-sm md:text-base uppercase">Task 1: Order Microscopic Muscle Layers (Outer to Inner)</h3>
+                <span className="text-xs bg-slate-100 text-slate-600 font-semibold px-2.5 py-1 rounded">Interactive Sorting</span>
+              </div>
+              <p className="text-xs text-slate-500 italic mb-4">Use the Up and Down arrow buttons to arrange the layers from largest/outermost (1) to smallest/innermost (8).</p>
+
+              <div className="space-y-2 text-xs">
+                {formData.s3_t1.map((item, idx) => {
+                  const evalRes = evaluation?.sheet3?.fields[`s3_t1_${idx}`];
+                  return (
+                    <div
+                      key={item}
+                      className={`flex items-center justify-between p-2.5 rounded border transition ${
+                        evalRes
+                          ? evalRes.isCorrect ? 'bg-emerald-50 border-emerald-400 text-emerald-900' : 'bg-rose-50 border-rose-400 text-rose-900'
+                          : 'bg-slate-50 border-slate-200'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="font-bold bg-slate-900 text-white w-6 h-6 rounded-full flex items-center justify-center text-[11px]">
+                          {idx + 1}
+                        </span>
+                        <span className="font-semibold text-slate-800">{item}</span>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {evalRes && (
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${evalRes.isCorrect ? 'bg-emerald-200 text-emerald-800' : 'bg-rose-200 text-rose-800'}`}>
+                            {evalRes.isCorrect ? '✓ Correct Rank' : `✗ Target: ${evalRes.expected}`}
+                          </span>
+                        )}
+
+                        <div className="flex gap-1">
+                          <button
+                            onClick={() => moveHierarchyItem(idx, -1)}
+                            disabled={idx === 0}
+                            className="bg-slate-200 hover:bg-slate-300 disabled:opacity-30 px-2 py-1 rounded text-slate-700 font-bold"
+                          >
+                            ▲
+                          </button>
+                          <button
+                            onClick={() => moveHierarchyItem(idx, 1)}
+                            disabled={idx === formData.s3_t1.length - 1}
+                            className="bg-slate-200 hover:bg-slate-300 disabled:opacity-30 px-2 py-1 rounded text-slate-700 font-bold"
+                          >
+                            ▼
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Task 2: Fibre Matrix */}
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+              <h3 className="font-bold text-slate-800 text-sm md:text-base uppercase border-b pb-2 mb-4">Task 2: Muscle Fibre Type Comparison Matrix</h3>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-100 text-slate-700 border-b">
+                      <th className="p-2">Feature / Characteristic</th>
+                      <th className="p-2">Type 1 (Slow Oxidative)</th>
+                      <th className="p-2">Type 2a (Fast Oxidative)</th>
+                      <th className="p-2">Type 2b (Fast Glycolytic)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[
+                      { trait: 'Contraction Speed', k1: 't1_speed', k2a: 't2a_speed', k2b: 't2b_speed' },
+                      { trait: 'Force Production', k1: 't1_force', k2a: 't2a_force', k2b: 't2b_force' },
+                      { trait: 'Fatigue Resistance', k1: 't1_fatigue', k2a: 't2a_fatigue', k2b: 't2b_fatigue' },
+                      { trait: 'Fibre Size / Thickness', k1: 't1_size', k2a: 't2a_size', k2b: 't2b_size' },
+                      { trait: 'Primary Athlete Match', k1: 't1_athlete', k2a: 't2a_athlete', k2b: 't2b_athlete' }
+                    ].map((row) => (
+                      <tr key={row.trait} className="border-b hover:bg-slate-50">
+                        <td className="p-2 font-bold text-slate-800">{row.trait}</td>
+                        {[row.k1, row.k2a, row.k2b].map((key) => {
+                          const evalRes = evaluation?.sheet3?.fields[`s3_t2_${key}`];
+                          return (
+                            <td key={key} className="p-2">
+                              <input
+                                type="text"
+                                value={formData.s3_t2[key]}
+                                onChange={(e) => handleInputChange('s3_t2', key, e.target.value)}
+                                placeholder="Type answer..."
+                                className={`w-full border rounded px-2 py-1 text-xs ${
+                                  evalRes
+                                    ? evalRes.isCorrect ? 'border-emerald-500 bg-emerald-50 text-emerald-900' : 'border-rose-500 bg-rose-50 text-rose-900'
+                                    : 'border-slate-300'
+                                }`}
+                              />
+                              {evalRes && !evalRes.isCorrect && (
+                                <div className="text-[10px] text-rose-600 font-semibold">Ans: {evalRes.expected}</div>
+                              )}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Task 3: Fibre Distribution Rules */}
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+              <h3 className="font-bold text-slate-800 text-sm md:text-base uppercase border-b pb-2 mb-4">Task 3: Fibre Distribution &amp; Adaptation Rules</h3>
+
+              <div className="space-y-3 text-xs">
+                {[
+                  { key: 'q1', label: '1. What is the average muscle fibre distribution percentage ratio in sedentary individuals?' },
+                  { key: 'q2', label: '2. True/False: Can Slow Twitch fibres convert into Fast Twitch fibres through sprint training?' },
+                  { key: 'q3', label: '3. Which specific fast twitch subtypes can swap characteristics with training?' }
+                ].map((item) => {
+                  const evalRes = evaluation?.sheet3?.fields[`s3_t3_${item.key}`];
+                  return (
+                    <div key={item.key} className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-1">
+                      <label className="font-semibold text-slate-700 block">{item.label}</label>
+                      <input
+                        type="text"
+                        value={formData.s3_t3[item.key]}
+                        onChange={(e) => handleInputChange('s3_t3', item.key, e.target.value)}
+                        placeholder="Type answer..."
+                        className={`w-full border rounded px-3 py-1.5 text-xs ${
+                          evalRes
+                            ? evalRes.isCorrect ? 'border-emerald-500 bg-emerald-50 text-emerald-900' : 'border-rose-500 bg-rose-50 text-rose-900'
+                            : 'border-slate-300'
+                        }`}
+                      />
+                      {evalRes && !evalRes.isCorrect && (
+                        <p className="text-[10px] text-rose-600 font-semibold">Expected Answer: {evalRes.expected}</p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {}
+        {(activeTab === 'sheet4' || activeTab === 'all') && (
+          <div className="space-y-6">
+            <div className="bg-slate-900 text-white p-4 rounded-xl shadow-sm">
+              <h2 className="text-lg font-bold uppercase tracking-wide text-emerald-400">Sheet 4: Effects of Exercise &amp; Warm-Up / Cool-Down</h2>
+              <p className="text-xs text-slate-300">LO2 Muscular System • Short-Term vs Long-Term Adaptations &amp; Physiological Mechanisms</p>
+            </div>
+
+            {/* Task 1: Short vs Long Term Sorting */}
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+              <h3 className="font-bold text-slate-800 text-sm md:text-base uppercase border-b pb-2 mb-4">Task 1: Short-Term vs. Long-Term Exercise Effects</h3>
+
+              <div className="space-y-2 text-xs">
+                {SHORT_LONG_ITEMS.map((item) => {
+                  const evalRes = evaluation?.sheet4?.fields[`s4_t1_${item.id}`];
+                  return (
+                    <div key={item.id} className="p-3 bg-slate-50 border border-slate-200 rounded-lg flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-medium text-slate-700 flex-1 min-w-[240px]">{item.text}</span>
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={formData.s4_t1[item.id]}
+                          onChange={(e) => handleInputChange('s4_t1', item.id, e.target.value)}
+                          className={`border rounded px-2.5 py-1 text-xs font-semibold ${
+                            evalRes
+                              ? evalRes.isCorrect ? 'border-emerald-500 bg-emerald-50 text-emerald-900' : 'border-rose-500 bg-rose-50 text-rose-900'
+                              : 'border-slate-300 bg-white'
+                          }`}
+                        >
+                          <option value="">-- Categorise Effect --</option>
+                          <option value="Short-Term">Short-Term Effect</option>
+                          <option value="Long-Term">Long-Term Adaptation</option>
+                        </select>
+                        {evalRes && (
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${evalRes.isCorrect ? 'bg-emerald-200 text-emerald-800' : 'bg-rose-200 text-rose-800'}`}>
+                            {evalRes.isCorrect ? '✓ Correct' : `✗ ${evalRes.expected}`}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Task 2: Warm-Up vs Cool-Down Sorting */}
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+              <h3 className="font-bold text-slate-800 text-sm md:text-base uppercase border-b pb-2 mb-4">Task 2: Warm-Up vs. Cool-Down Mechanisms</h3>
+
+              <div className="space-y-2 text-xs">
+                {WARM_COOL_ITEMS.map((item) => {
+                  const evalRes = evaluation?.sheet4?.fields[`s4_t2_${item.id}`];
+                  return (
+                    <div key={item.id} className="p-3 bg-slate-50 border border-slate-200 rounded-lg flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-medium text-slate-700 flex-1 min-w-[240px]">{item.text}</span>
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={formData.s4_t2[item.id]}
+                          onChange={(e) => handleInputChange('s4_t2', item.id, e.target.value)}
+                          className={`border rounded px-2.5 py-1 text-xs font-semibold ${
+                            evalRes
+                              ? evalRes.isCorrect ? 'border-emerald-500 bg-emerald-50 text-emerald-900' : 'border-rose-500 bg-rose-50 text-rose-900'
+                              : 'border-slate-300 bg-white'
+                          }`}
+                        >
+                          <option value="">-- Select Phase --</option>
+                          <option value="Warm-Up">Warm-Up Benefit</option>
+                          <option value="Cool-Down">Cool-Down Benefit</option>
+                        </select>
+                        {evalRes && (
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${evalRes.isCorrect ? 'bg-emerald-200 text-emerald-800' : 'bg-rose-200 text-rose-800'}`}>
+                            {evalRes.isCorrect ? '✓ Correct' : `✗ ${evalRes.expected}`}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Task 3: True / False Conceptual Check */}
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+              <h3 className="font-bold text-slate-800 text-sm md:text-base uppercase border-b pb-2 mb-4">Task 3: Conceptual True / False Check</h3>
+
+              <div className="space-y-3 text-xs">
+                {TRUE_FALSE_ITEMS.map((item) => {
+                  const evalRes = evaluation?.sheet4?.fields[`s4_t3_${item.id}`];
+                  return (
+                    <div key={item.id} className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-semibold text-slate-800 flex-1">{item.statement}</span>
+                        <div className="flex items-center gap-2">
+                          <select
+                            value={formData.s4_t3[item.id]}
+                            onChange={(e) => handleInputChange('s4_t3', item.id, e.target.value)}
+                            className={`border rounded px-2.5 py-1 text-xs font-bold ${
+                              evalRes
+                                ? evalRes.isCorrect ? 'border-emerald-500 bg-emerald-50 text-emerald-900' : 'border-rose-500 bg-rose-50 text-rose-900'
+                                : 'border-slate-300 bg-white'
+                            }`}
+                          >
+                            <option value="">-- TRUE / FALSE --</option>
+                            <option value="TRUE">TRUE</option>
+                            <option value="FALSE">FALSE</option>
+                          </select>
+                          {evalRes && (
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${evalRes.isCorrect ? 'bg-emerald-200 text-emerald-800' : 'bg-rose-200 text-rose-800'}`}>
+                              {evalRes.isCorrect ? '✓ Correct' : `✗ ${evalRes.expected}`}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      {evalRes && (
+                        <p className="text-[11px] text-slate-600 bg-white p-2 rounded border border-slate-200">
+                          <strong>Key Explanation:</strong> {item.explanation}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {}
+        {activeTab === 'summary' && (
+          <div className="space-y-6">
+            <div className="bg-slate-900 text-white p-5 rounded-xl shadow-sm flex flex-wrap justify-between items-center gap-4">
+              <div>
+                <h2 className="text-xl font-bold uppercase tracking-wide text-emerald-400">Workbook Summary &amp; Teacher Evaluation</h2>
+                <p className="text-xs text-slate-300">Detailed breakdown of score performance across all 4 revision sheets.</p>
+              </div>
+
+              {!evaluation && (
+                <button
+                  onClick={runSelfMarking}
+                  className="bg-emerald-500 hover:bg-emerald-400 text-slate-900 font-bold text-xs px-4 py-2.5 rounded shadow transition"
+                >
+                  Run Full Marking Assessment
+                </button>
+              )}
+            </div>
+
+            {evaluation ? (
+              <div className="space-y-6">
+                {/* Total Score Banner */}
+                <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm text-center space-y-2">
+                  <div className="text-xs font-bold text-slate-500 uppercase tracking-widest">Overall Assessment Score</div>
+                  <div className="text-4xl md:text-5xl font-black text-slate-900">
+                    {evaluation.overallScore} <span className="text-2xl text-slate-400 font-normal">/ {evaluation.overallTotal}</span>
+                  </div>
+                  <div className="text-sm font-bold text-emerald-600">
+                    {Math.round((evaluation.overallScore / evaluation.overallTotal) * 100)}% Grade Score
+                  </div>
+                </div>
+
+                {/* Individual Sheet Breakdown Cards */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {[
+                    { id: 'sheet1', title: 'Sheet 1: Anatomy & Contractions' },
+                    { id: 'sheet2', title: 'Sheet 2: Roles & Movement Matrix' },
+                    { id: 'sheet3', title: 'Sheet 3: Microscopic & Fibre Types' },
+                    { id: 'sheet4', title: 'Sheet 4: Exercise & Warm-Up' }
+                  ].map(sheet => {
+                    const data = evaluation[sheet.id];
+                    const pct = Math.round((data.score / data.total) * 100);
+                    return (
+                      <div key={sheet.id} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-3">
+                        <div className="flex justify-between items-center border-b pb-2">
+                          <h4 className="font-bold text-slate-800 text-sm">{sheet.title}</h4>
+                          <span className="text-xs font-bold bg-slate-100 text-slate-700 px-2 py-0.5 rounded">
+                            {data.score} / {data.total}
+                          </span>
+                        </div>
+
+                        <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                          <div
+                            className={`h-2 rounded-full ${pct >= 70 ? 'bg-emerald-500' : pct >= 50 ? 'bg-amber-500' : 'bg-rose-500'}`}
+                            style={{ width: `${pct}%` }}
+                          ></div>
+                        </div>
+
+                        <div className="text-xs text-slate-600 font-medium text-right">
+                          Score: {pct}%
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+              <div className="bg-white p-8 rounded-xl border border-slate-200 text-center text-slate-500 space-y-2">
+                <p className="font-semibold text-sm">No evaluation data available yet.</p>
+                <p className="text-xs">Fill in your workbook answers and click "Mark My Work" at the top to see your results.</p>
+              </div>
+            )}
+          </div>
+        )}
+
+      </main>
+
+      {/* Confirmation Modal for Reset */}
+      {showResetModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white max-w-sm w-full rounded-xl shadow-2xl p-5 space-y-4">
+            <h3 className="font-bold text-slate-900 text-base">Confirm Workbook Reset</h3>
+            <p className="text-xs text-slate-600">Are you sure you want to clear all entered answers? This action cannot be undone.</p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setShowResetModal(false)}
+                className="px-3 py-1.5 rounded text-xs font-semibold text-slate-600 hover:bg-slate-100"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleReset}
+                className="px-3 py-1.5 rounded text-xs font-semibold bg-rose-600 text-white hover:bg-rose-500"
+              >
+                Yes, Reset All
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
